@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: estore-mcp
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      # Render sets PORT automatically; Program.cs reads it.
+      # Set a strong value to require "Authorization: Bearer <token>" on MCP requests.
+      # Generate once in the Render dashboard, or `sync: false` to be prompted on deploy.
+      - key: MCP_AUTH_TOKEN
+        sync: false
