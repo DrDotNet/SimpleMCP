@@ -7,8 +7,13 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Render (and most PaaS) inject the port to listen on via the PORT env var.
 // Bind to 0.0.0.0 so the container is reachable; fall back to 8080 locally.
-var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
-builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
+// Always plain HTTP — in production (Render) TLS is terminated by the platform.
+var port = int.Parse(Environment.GetEnvironmentVariable("PORT") ?? "8080");
+
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ListenAnyIP(port);
+});
 
 // MCP server over Streamable HTTP. Tools are discovered from the attributed class below.
 builder.Services
@@ -18,36 +23,11 @@ builder.Services
 
 var app = builder.Build();
 
-// Optional shared-secret guard. When MCP_AUTH_TOKEN is set, every MCP request must send
-// "Authorization: Bearer <token>". Left unset (e.g. local dev) the endpoint is open.
-var authToken = Environment.GetEnvironmentVariable("MCP_AUTH_TOKEN");
-if (!string.IsNullOrEmpty(authToken))
-{
-    app.Use(async (context, next) =>
-    {
-        if (context.Request.Path.StartsWithSegments("/health"))
-        {
-            await next();
-            return;
-        }
-
-        var header = context.Request.Headers.Authorization.ToString();
-        if (header != $"Bearer {authToken}")
-        {
-            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            await context.Response.WriteAsync("Unauthorized");
-            return;
-        }
-
-        await next();
-    });
-}
-
-// Plain HTTP 200 for Render's health checks (does not require MCP auth).
+// Plain HTTP 200 for Render's health checks.
 app.MapGet("/health", () => Results.Ok("healthy"));
 
-// Maps the MCP Streamable HTTP endpoint at the application root.
-app.MapMcp();
+// Maps the MCP Streamable HTTP endpoint at /mcp (matches the Jawwal/Postman convention).
+app.MapMcp("/mcp");
 
 app.Run();
 
