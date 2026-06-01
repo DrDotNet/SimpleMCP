@@ -1,4 +1,6 @@
 using System.ComponentModel;
+using System.Text;
+using System.Text.Json;
 using ModelContextProtocol.Server;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -12,7 +14,7 @@ builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 builder.Services
     .AddMcpServer()
     .WithHttpTransport()
-    .WithTools<EcommerceTool>();
+    .WithTools<JawwalTools>();
 
 var app = builder.Build();
 
@@ -50,121 +52,222 @@ app.MapMcp();
 app.Run();
 
 [McpServerToolType]
-public sealed class EcommerceTool
+public sealed class JawwalTools
 {
-    [McpServerTool(Name = "get_product_details"),
-     Description("Retrieve detailed information about a product including name, price, stock, and description")]
-    public static string GetProductDetails(
-        [Description("Product ID or SKU")] string productId)
+    // ----- E-Commerce tools (Bagisto) ---------------------------------------
+
+    [McpServerTool(Name = "search_catalog"),
+     Description("Search the product catalog by keyword and/or category. Returns matching products.")]
+    public static Task<string> SearchCatalog(
+        [Description("Search keyword or phrase")] string query = "",
+        [Description("Filter by category (e.g. data_bundle, sim_card)")] string category = "",
+        [Description("Maximum number of results to return")] int limit = 10)
     {
-        return $@"{{
-    ""productId"": ""{productId}"",
-    ""name"": ""Premium Wireless Headphones"",
-    ""price"": 149.99,
-    ""currency"": ""USD"",
-    ""stockQuantity"": 45,
-    ""category"": ""Electronics"",
-    ""description"": ""High-quality wireless headphones with noise cancellation and 30-hour battery life"",
-    ""rating"": 4.5,
-    ""reviews"": 1247
-}}";
+        var args = new Dictionary<string, object> { ["limit"] = limit };
+        if (!string.IsNullOrWhiteSpace(query)) args["query"] = query;
+        if (!string.IsNullOrWhiteSpace(category)) args["category"] = category;
+        return JawwalMcpClient.CallToolAsync("search_catalog", args);
     }
 
-    [McpServerTool(Name = "search_products"),
-     Description("Search for products by keyword, category, or filter criteria. Returns a list of matching products")]
-    public static string SearchProducts(
-        [Description("Search keyword or phrase")] string query,
-        [Description("Filter by category (e.g., Electronics, Clothing, Home)")] string category = "All")
+    [McpServerTool(Name = "get_price_availability"),
+     Description("Get the current price, currency and stock availability for a product.")]
+    public static Task<string> GetPriceAvailability(
+        [Description("Product ID or SKU")] string productId)
     {
-        return $@"{{
-    ""query"": ""{query}"",
-    ""category"": ""{category}"",
-    ""totalResults"": 3,
-    ""products"": [
-        {{
-            ""productId"": ""PRD-001"",
-            ""name"": ""Wireless Mouse"",
-            ""price"": 29.99,
-            ""stockQuantity"": 120,
-            ""rating"": 4.3
-        }},
-        {{
-            ""productId"": ""PRD-002"",
-            ""name"": ""Mechanical Keyboard"",
-            ""price"": 89.99,
-            ""stockQuantity"": 67,
-            ""rating"": 4.7
-        }},
-        {{
-            ""productId"": ""PRD-003"",
-            ""name"": ""USB-C Hub"",
-            ""price"": 34.99,
-            ""stockQuantity"": 89,
-            ""rating"": 4.4
-        }}
-    ]
-}}";
+        return JawwalMcpClient.CallToolAsync("get_price_availability", new { product_id = productId });
+    }
+
+    [McpServerTool(Name = "manage_cart"),
+     Description("View the cart, add an item, or remove an item. action = view | add | remove.")]
+    public static Task<string> ManageCart(
+        [Description("Cart action: view, add, or remove")] string action,
+        [Description("Product ID (required for add)")] string productId = "",
+        [Description("Quantity to add (required for add)")] int quantity = 1,
+        [Description("Cart item ID (required for remove)")] string cartItemId = "")
+    {
+        var args = new Dictionary<string, object> { ["action"] = action };
+        if (!string.IsNullOrWhiteSpace(productId)) args["product_id"] = productId;
+        if (string.Equals(action, "add", StringComparison.OrdinalIgnoreCase)) args["quantity"] = quantity;
+        if (!string.IsNullOrWhiteSpace(cartItemId)) args["cart_item_id"] = cartItemId;
+        return JawwalMcpClient.CallToolAsync("manage_cart", args);
     }
 
     [McpServerTool(Name = "get_order_status"),
-     Description("Check the current status and tracking information for a customer order")]
-    public static string GetOrderStatus(
+     Description("Check the current status and tracking information for an order.")]
+    public static Task<string> GetOrderStatus(
         [Description("Order number or ID")] string orderId)
     {
-        return $@"{{
-    ""orderId"": ""{orderId}"",
-    ""status"": ""In Transit"",
-    ""orderDate"": ""2025-10-08T14:30:00Z"",
-    ""estimatedDelivery"": ""2025-10-14T18:00:00Z"",
-    ""trackingNumber"": ""TRK-{orderId}-XYZ"",
-    ""carrier"": ""FastShip Express"",
-    ""items"": [
-        {{
-            ""productId"": ""PRD-001"",
-            ""name"": ""Wireless Mouse"",
-            ""quantity"": 2,
-            ""price"": 29.99
-        }}
-    ],
-    ""totalAmount"": 59.98,
-    ""shippingAddress"": ""123 Main St, Anytown, USA""
-}}";
+        return JawwalMcpClient.CallToolAsync("get_order_status", new { order_id = orderId });
     }
 
-    [McpServerTool(Name = "add_to_cart"),
-     Description("Add a product to the shopping cart with specified quantity")]
-    public static string AddToCart(
-        [Description("Product ID to add")] string productId,
-        [Description("Quantity to add (must be positive)")] int quantity)
+    // ----- Admin tools ------------------------------------------------------
+
+    [McpServerTool(Name = "check_inventory"),
+     Description("Check warehouse inventory levels (admin). Optionally filter by warehouse or low stock only.")]
+    public static Task<string> CheckInventory(
+        [Description("Warehouse name, or 'all' for every warehouse")] string warehouse = "all",
+        [Description("When true, only return products that are low on stock")] bool lowStockOnly = false)
     {
-        return $@"{{
-    ""success"": true,
-    ""message"": ""Product added to cart successfully"",
-    ""cartId"": ""CART-123456"",
-    ""productId"": ""{productId}"",
-    ""quantity"": {quantity},
-    ""cartTotal"": {quantity * 49.99:F2},
-    ""itemsInCart"": {quantity + 2}
-}}";
+        return JawwalMcpClient.CallToolAsync("check_inventory", new
+        {
+            warehouse,
+            low_stock_only = lowStockOnly
+        });
     }
 
-    [McpServerTool(Name = "get_customer_info"),
-     Description("Retrieve customer account information including order history, loyalty points, and preferences")]
-    public static string GetCustomerInfo(
-        [Description("Customer ID or email address")] string customerId)
+    [McpServerTool(Name = "get_sales_statistics"),
+     Description("Get aggregated sales statistics over a date range (admin).")]
+    public static Task<string> GetSalesStatistics(
+        [Description("Start date (YYYY-MM-DD)")] string startDate,
+        [Description("End date (YYYY-MM-DD)")] string endDate,
+        [Description("Grouping: day, week, or month")] string groupBy = "day")
     {
-        return $@"{{
-    ""customerId"": ""{customerId}"",
-    ""name"": ""John Doe"",
-    ""email"": ""john.doe@example.com"",
-    ""memberSince"": ""2023-05-15"",
-    ""loyaltyPoints"": 2450,
-    ""tier"": ""Gold"",
-    ""totalOrders"": 23,
-    ""totalSpent"": 3456.78,
-    ""preferredCategories"": [""Electronics"", ""Books"", ""Home & Garden""],
-    ""savedAddresses"": 2,
-    ""paymentMethodsOnFile"": 3
-}}";
+        return JawwalMcpClient.CallToolAsync("get_sales_statistics", new
+        {
+            start_date = startDate,
+            end_date = endDate,
+            group_by = groupBy
+        });
     }
+}
+
+/// <summary>
+/// Thin client that forwards tool calls to the Jawwal MCP server using the standard
+/// MCP JSON-RPC 2.0 protocol (POST {base}/mcp). This is the same endpoint Claude Desktop
+/// uses and requires no Bearer token (the server defaults to the ai_agent channel).
+/// </summary>
+internal static class JawwalMcpClient
+{
+    // Configurable via env var; defaults to the Postman collection's base_url.
+    private static readonly string Endpoint =
+        Environment.GetEnvironmentVariable("JAWWAL_MCP_URL") ?? "http://localhost:8000/mcp";
+
+    private static readonly HttpClient Http = new()
+    {
+        Timeout = TimeSpan.FromSeconds(30)
+    };
+
+    private static int _requestId;
+
+    public static async Task<string> CallToolAsync(string toolName, object arguments)
+    {
+        var requestId = Interlocked.Increment(ref _requestId);
+        var payload = new
+        {
+            jsonrpc = "2.0",
+            id = requestId,
+            method = "tools/call",
+            @params = new
+            {
+                name = toolName,
+                arguments
+            }
+        };
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint)
+            {
+                Content = new StringContent(
+                    JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
+            };
+            // Streamable HTTP servers may answer with either JSON or an SSE stream.
+            request.Headers.Accept.ParseAdd("application/json");
+            request.Headers.Accept.ParseAdd("text/event-stream");
+
+            using var response = await Http.SendAsync(request);
+            var body = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                return Error($"Backend returned HTTP {(int)response.StatusCode} for tool '{toolName}'.", body);
+            }
+
+            return ParseJsonRpcResult(ExtractJson(body), toolName);
+        }
+        catch (Exception ex)
+        {
+            return Error($"Failed to reach Jawwal MCP server at {Endpoint} for tool '{toolName}'.", ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Streamable HTTP may wrap the JSON-RPC envelope in Server-Sent Events framing
+    /// (lines like "data: {...}"). Pull the JSON payload out of either form.
+    /// </summary>
+    private static string ExtractJson(string body)
+    {
+        var trimmed = body.TrimStart();
+        if (trimmed.StartsWith('{') || trimmed.StartsWith('['))
+        {
+            return body;
+        }
+
+        var builder = new StringBuilder();
+        foreach (var line in body.Split('\n'))
+        {
+            var trimmedLine = line.TrimStart();
+            if (trimmedLine.StartsWith("data:", StringComparison.Ordinal))
+            {
+                builder.Append(trimmedLine["data:".Length..].Trim());
+            }
+        }
+
+        return builder.Length > 0 ? builder.ToString() : body;
+    }
+
+    /// <summary>
+    /// Unwraps the JSON-RPC envelope: returns the text content of a successful tool
+    /// result, surfaces JSON-RPC errors, and falls back to the raw result otherwise.
+    /// </summary>
+    private static string ParseJsonRpcResult(string json, string toolName)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+
+            if (root.TryGetProperty("error", out var error))
+            {
+                var message = error.TryGetProperty("message", out var m) ? m.GetString() : "unknown error";
+                return Error($"Tool '{toolName}' returned a JSON-RPC error.", message ?? "unknown error");
+            }
+
+            if (root.TryGetProperty("result", out var result))
+            {
+                // MCP tool results expose their payload under result.content[].text.
+                if (result.TryGetProperty("content", out var content) &&
+                    content.ValueKind == JsonValueKind.Array)
+                {
+                    var builder = new StringBuilder();
+                    foreach (var item in content.EnumerateArray())
+                    {
+                        if (item.TryGetProperty("text", out var text) &&
+                            text.ValueKind == JsonValueKind.String)
+                        {
+                            if (builder.Length > 0) builder.Append('\n');
+                            builder.Append(text.GetString());
+                        }
+                    }
+
+                    if (builder.Length > 0)
+                    {
+                        return builder.ToString();
+                    }
+                }
+
+                return result.GetRawText();
+            }
+
+            return json;
+        }
+        catch (JsonException)
+        {
+            // Not parseable as JSON — hand back whatever the server sent.
+            return json;
+        }
+    }
+
+    private static string Error(string summary, string detail) =>
+        JsonSerializer.Serialize(new { error = summary, detail });
 }
